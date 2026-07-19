@@ -116,7 +116,26 @@ class OllamaBackend(Backend):
     supports_dynamic = True
 
     def __init__(self, model: str = OLLAMA_MODEL):
-        self.model = model
+        self.model = self._resolve_model(model)
+
+    @staticmethod
+    def _resolve_model(wanted: str) -> str:
+        """Use the requested model if pulled; otherwise fall back to whatever is."""
+        try:
+            with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=5) as r:
+                installed = [m["name"] for m in json.load(r)["models"]]
+        except Exception:
+            return wanted  # server will report its own error later
+        if not installed:
+            raise RuntimeError(
+                "Ollama is running but has no models. Pull one first: ollama pull llama3.1")
+        for name in installed:
+            if name == wanted or name.split(":")[0] == wanted.split(":")[0]:
+                return name
+        fallback = installed[0]
+        print(f"warning: Ollama model '{wanted}' not installed; using '{fallback}'. "
+              f"Override with HOWCOPY_OLLAMA_MODEL.", file=sys.stderr)
+        return fallback
 
     def _json_call(self, prompt: str, schema: dict) -> dict:
         body = json.dumps({
