@@ -129,7 +129,7 @@ def read_transmission(prompt: str = "Bravo 1 > ") -> str:
 def run():
     parser = argparse.ArgumentParser(prog="howcopy",
                                      description="Tactical radio comms drill for everyday life")
-    parser.add_argument("--backend", choices=["auto", "anthropic", "ollama", "offline"],
+    parser.add_argument("--backend", choices=["auto", "deepseek", "anthropic", "ollama", "offline"],
                         default=None, help="grading backend (default: auto-detect)")
     args = parser.parse_args()
 

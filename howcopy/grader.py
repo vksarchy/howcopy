@@ -25,6 +25,32 @@ def _env(name: str, default: str) -> str:
 DEFAULT_MODEL = _env("MODEL", "claude-opus-4-8")
 OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = _env("OLLAMA_MODEL", "llama3.1")
+DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_BASE_URL = os.environ.get("HOWCOPY_DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic")
+
+
+def _deepseek_api_key() -> str:
+    """Resolve the DeepSeek key without ever requiring it live in the repo.
+
+    Checked in order: HOWCOPY_DEEPSEEK_API_KEY (raw value), then
+    HOWCOPY_DEEPSEEK_API_KEY_FILE (path to a secret file — e.g. an
+    agenix-decrypted /run/agenix/<name>), then bare DEEPSEEK_API_KEY.
+    """
+    key = os.environ.get("HOWCOPY_DEEPSEEK_API_KEY")
+    if key:
+        return key
+    key_file = os.environ.get("HOWCOPY_DEEPSEEK_API_KEY_FILE")
+    if key_file:
+        with open(key_file) as f:
+            return f.read().strip()
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if key:
+        return key
+    raise RuntimeError(
+        "No DeepSeek key found. Set HOWCOPY_DEEPSEEK_API_KEY, or "
+        "HOWCOPY_DEEPSEEK_API_KEY_FILE pointing at a decrypted secret file "
+        "(agenix and friends), or DEEPSEEK_API_KEY."
+    )
 
 
 @dataclass
@@ -109,6 +135,68 @@ class AnthropicBackend(Backend):
         data = self._json_call(prompts.net_reply_prompt(scenario, transcript, turn),
                                prompts.NET_REPLY_SCHEMA)
         return NetReply(**data)
+
+
+class DeepSeekBackend(Backend):
+    """DeepSeek V4, via its Anthropic-API-compatible endpoint.
+
+    Uses forced tool-use (not output_config json_schema) for structured
+    output: DeepSeek's compat layer documents json_schema support as
+    partial, but tool_choice-forced tool calls are fully supported.
+    """
+    name = "deepseek"
+    supports_dynamic = True
+
+    def __init__(self, model: str = DEEPSEEK_MODEL):
+        import anthropic
+        self.client = anthropic.Anthropic(api_key=_deepseek_api_key(), base_url=DEEPSEEK_BASE_URL)
+        self.model = model
+
+    def _tool_call(self, prompt: str, schema: dict, attempts: int = 3) -> dict:
+        last_empty = False
+        for _ in range(attempts):
+            resp = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                # deepseek-v4-pro defaults to thinking mode, which rejects a
+                # forced tool_choice ("Thinking mode does not support this
+                # tool_choice"). Structured output here doesn't need reasoning.
+                thinking={"type": "disabled"},
+                system=prompts.INSTRUCTOR_SYSTEM,
+                tools=[{
+                    "name": "submit_result",
+                    "description": "Submit the structured result for this turn.",
+                    "input_schema": schema,
+                }],
+                tool_choice={"type": "tool", "name": "submit_result"},
+                messages=[{"role": "user", "content": prompt}],
+            )
+            block = next((b for b in resp.content if b.type == "tool_use"), None)
+            if block is None:
+                raise RuntimeError("DeepSeek didn't return structured output. Say again.")
+            # DeepSeek's tool-call arguments occasionally arrive empty even
+            # on stop_reason="tool_use" (observed ~40% on deepseek-v4-pro,
+            # not reproduced on deepseek-v4-flash). Retry rather than crash.
+            if block.input:
+                return block.input
+            last_empty = True
+        raise RuntimeError("DeepSeek returned empty tool arguments repeatedly. Say again."
+                           if last_empty else "DeepSeek didn't return structured output.")
+
+    def grade(self, scenario, transcript) -> Grade:
+        data = self._tool_call(prompts.grade_prompt(scenario, transcript), prompts.GRADE_SCHEMA)
+        data = {k: data.get(k) for k in prompts.GRADE_SCHEMA["required"]}
+        return Grade(**data)
+
+    def net_reply(self, scenario, transcript, turn) -> NetReply:
+        data = self._tool_call(prompts.net_reply_prompt(scenario, transcript, turn),
+                               prompts.NET_REPLY_SCHEMA)
+        complete = data.get("exchange_complete")
+        return NetReply(
+            reply=data["reply"],
+            speaker=data.get("speaker", "Bravo 2"),
+            exchange_complete=complete is True or str(complete).lower() == "true",
+        )
 
 
 class OllamaBackend(Backend):
@@ -248,7 +336,13 @@ def pick_backend(forced: str | None = None) -> Backend:
         return OllamaBackend()
     if choice == "anthropic":
         return AnthropicBackend()
-    # auto-detect: Anthropic creds -> Ollama server -> offline
+    if choice == "deepseek":
+        return DeepSeekBackend()
+    # auto-detect: DeepSeek creds -> Anthropic creds -> Ollama server -> offline
+    try:
+        return DeepSeekBackend()
+    except Exception:
+        pass
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN") \
             or os.path.isdir(os.path.expanduser("~/.config/anthropic")):
         try:

@@ -40,9 +40,23 @@ Auto-detected in this order (force with `--backend`):
 
 | Backend | Needs | Notes |
 |---|---|---|
+| `deepseek` | A DeepSeek key (see below) | Full experience: levels 1–5 including dynamic net traffic. Talks to DeepSeek's Anthropic-compatible endpoint (`https://api.deepseek.com/anthropic`) via the `anthropic` SDK. Model via `HOWCOPY_DEEPSEEK_MODEL` (default `deepseek-v4-flash`; `deepseek-v4-pro` works too but its tool-call arguments come back empty ~40% of the time — retried automatically, but flash doesn't need the retry). |
 | `anthropic` | `ANTHROPIC_API_KEY` (or an `ant auth login` profile) | Full experience: levels 1–5 including dynamic net traffic where TOC and Bravo 2 talk back. Model via `HOWCOPY_MODEL` (default `claude-opus-4-8`). |
 | `ollama` | Local Ollama server (`OLLAMA_HOST`, default `localhost:11434`) | Free, local. Model via `HOWCOPY_OLLAMA_MODEL` (default `llama3.1`). |
 | `offline` | Nothing | Heuristic pattern grading, levels 1–3 only. |
+
+### DeepSeek key
+
+Resolved in order, first match wins — none of these should ever be a value
+committed to the repo:
+
+1. `HOWCOPY_DEEPSEEK_API_KEY` — raw key in the environment.
+2. `HOWCOPY_DEEPSEEK_API_KEY_FILE` — path to a file holding the key, e.g. an
+   agenix-decrypted secret at `/run/agenix/deepseek-key`. This is the
+   recommended path for a NixOS setup: keep the key as an agenix secret in
+   your system flake, point this var at the decrypted path, and the raw key
+   never touches the shell environment or a public repo.
+3. `DEEPSEEK_API_KEY` — plain fallback if something else already exports it.
 
 Legacy `PLAINSPEAK_*` environment variables still work as a deprecated
 fallback (with a warning) — the project was renamed from `plainspeak`.
